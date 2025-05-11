@@ -370,6 +370,6 @@ def get_stored_distribution(date_str):
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5050))
+    port = int(os.getenv("PORT", 8080))
     debug = os.getenv("DEBUG", "True").lower() == "true"
     app.run(debug=debug, port=port)
