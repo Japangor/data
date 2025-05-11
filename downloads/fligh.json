@@ -1,0 +1,458 @@
+{
+  "name": "WAISL Data Scraper",
+  "nodes": [
+    {
+      "parameters": {
+        "schedule": {
+          "mode": "everyX",
+          "interval": 1,
+          "unit": "hours"
+        }
+      },
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://hyd-apoc.waisl.in/digitaltwin/en/login",
+        "options": {
+          "splitIntoItems": false,
+          "ignoreSSLIssues": true,
+          "timeout": 30000
+        },
+        "authentication": "none",
+        "sendBody": false,
+        "headers": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+              "type": "string"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+              "type": "string"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7,hi;q=0.6",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "name": "HTTP Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Extract cookies and CSRF token from login page\nconst $ = cheerio.load($input.item.html);\nconst csrfToken = $('meta[name=\"csrf-token\"]').attr('content');\nconst cookies = $input.item.headers['set-cookie'];\n\n// Parse cookies into object\nconst cookieObj = {};\ncookies.forEach(cookie => {\n  const [name, value] = cookie.split(';')[0].split('=');\n  cookieObj[name] = value;\n});\n\n// Get current timestamp for API requests\nconst now = new Date();\nconst startTime = Math.floor(now.setHours(0, 0, 0, 0));\nconst endTime = Math.floor(now.setHours(23, 59, 59, 999));\n\nreturn {\n  json: {\n    csrfToken,\n    cookies: cookieObj,\n    startTime,\n    endTime\n  }\n};"
+      },
+      "name": "Function",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://hyd-apoc.waisl.in/digitaltwin/ui-api/airport/aodb/flightDetails",
+        "options": {
+          "splitIntoItems": false,
+          "ignoreSSLIssues": true,
+          "timeout": 30000
+        },
+        "authentication": "none",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "aircraftTypes",
+              "value": "null",
+              "type": "string"
+            },
+            {
+              "name": "airlineCodes",
+              "value": "null",
+              "type": "string"
+            },
+            {
+              "name": "boardingGates",
+              "value": "null",
+              "type": "string"
+            },
+            {
+              "name": "destinationCodes",
+              "value": "null",
+              "type": "string"
+            },
+            {
+              "name": "detailsType",
+              "value": "airline",
+              "type": "string"
+            },
+            {
+              "name": "distributionType",
+              "value": "daily",
+              "type": "string"
+            },
+            {
+              "name": "endTime",
+              "value": "={{$json.endTime}}",
+              "type": "string"
+            },
+            {
+              "name": "gateType",
+              "value": "null",
+              "type": "string"
+            },
+            {
+              "name": "movementIndicator",
+              "value": "null",
+              "type": "string"
+            },
+            {
+              "name": "natureTypes",
+              "value": "null",
+              "type": "string"
+            },
+            {
+              "name": "operationalStatuses",
+              "value": "[\"OPERATIONAL\"]",
+              "type": "string"
+            },
+            {
+              "name": "originCodes",
+              "value": "null",
+              "type": "string"
+            },
+            {
+              "name": "regionType",
+              "value": "null",
+              "type": "string"
+            },
+            {
+              "name": "runWays",
+              "value": "null",
+              "type": "string"
+            },
+            {
+              "name": "startTime",
+              "value": "={{$json.startTime}}",
+              "type": "string"
+            },
+            {
+              "name": "trafficType",
+              "value": "null",
+              "type": "string"
+            }
+          ]
+        },
+        "headers": {
+          "parameters": [
+            {
+              "name": "accept",
+              "value": "application/json, text/plain, */*",
+              "type": "string"
+            },
+            {
+              "name": "accept-language",
+              "value": "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7,hi;q=0.6",
+              "type": "string"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json",
+              "type": "string"
+            },
+            {
+              "name": "origin",
+              "value": "https://hyd-apoc.waisl.in",
+              "type": "string"
+            },
+            {
+              "name": "referer",
+              "value": "https://hyd-apoc.waisl.in/digitaltwin/en/main-dashboard/departure/639f655bb7bb6a75c0a3f645",
+              "type": "string"
+            },
+            {
+              "name": "x-csrf-token",
+              "value": "={{$json.csrfToken}}",
+              "type": "string"
+            }
+          ]
+        },
+        "sendCookies": true,
+        "cookieJar": "={{$json.cookies}}"
+      },
+      "name": "HTTP Request2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        850,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://hyd-apoc.waisl.in/digitaltwin/ui-api/airport/cuss/distribution",
+        "options": {
+          "splitIntoItems": false,
+          "ignoreSSLIssues": true,
+          "timeout": 30000
+        },
+        "authentication": "none",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "startTime",
+              "value": "={{$json.startTime}}",
+              "type": "string"
+            },
+            {
+              "name": "endTime",
+              "value": "={{$json.endTime}}",
+              "type": "string"
+            },
+            {
+              "name": "distributionType",
+              "value": "daily",
+              "type": "string"
+            },
+            {
+              "name": "groupBy",
+              "value": "null",
+              "type": "string"
+            }
+          ]
+        },
+        "headers": {
+          "parameters": [
+            {
+              "name": "accept",
+              "value": "application/json, text/plain, */*",
+              "type": "string"
+            },
+            {
+              "name": "accept-language",
+              "value": "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7,hi;q=0.6",
+              "type": "string"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json",
+              "type": "string"
+            },
+            {
+              "name": "origin",
+              "value": "https://hyd-apoc.waisl.in",
+              "type": "string"
+            },
+            {
+              "name": "referer",
+              "value": "https://hyd-apoc.waisl.in/digitaltwin/en/main-dashboard/departure/639f655bb7bb6a75c0a3f645",
+              "type": "string"
+            },
+            {
+              "name": "x-csrf-token",
+              "value": "={{$json.csrfToken}}",
+              "type": "string"
+            }
+          ]
+        },
+        "sendCookies": true,
+        "cookieJar": "={{$json.cookies}}"
+      },
+      "name": "HTTP Request3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Process and save flight details\nconst flightData = $input.item.json;\nconst date = new Date().toISOString().split('T')[0];\nconst fileName = `flightDetails_${date}.json`;\nconst fileContent = JSON.stringify(flightData, null, 2);\n\nreturn {\n  json: {\n    fileName,\n    fileContent,\n    date\n  }\n};"
+      },
+      "name": "Function2",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Process and save CUSS distribution data\nconst cussData = $input.item.json;\nconst date = $json.date;\nconst fileName = `distribution_${date}.json`;\nconst fileContent = JSON.stringify(cussData, null, 2);\n\nreturn {\n  json: {\n    fileName,\n    fileContent\n  }\n};"
+      },
+      "name": "Function3",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "path": "/downloads/{{$json.fileName}}",
+        "options": {
+          "createDir": true
+        },
+        "data": "={{$json.fileContent}}"
+      },
+      "name": "Write File",
+      "type": "n8n-nodes-base.writeFile",
+      "typeVersion": 1,
+      "position": [
+        1650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "path": "/downloads/{{$json.fileName}}",
+        "options": {
+          "createDir": true
+        },
+        "data": "={{$json.fileContent}}"
+      },
+      "name": "Write File2",
+      "type": "n8n-nodes-base.writeFile",
+      "typeVersion": 1,
+      "position": [
+        1850,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Create summary of the operation\nconst summary = {\n  date: $json.date,\n  flightDetailsSaved: true,\n  distributionSaved: true,\n  timestamp: new Date().toISOString()\n};\n\nreturn {\n  json: summary\n};"
+      },
+      "name": "Function4",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        2050,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Function",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request2": {
+      "main": [
+        [
+          {
+            "node": "Function2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request3": {
+      "main": [
+        [
+          {
+            "node": "Function3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function2": {
+      "main": [
+        [
+          {
+            "node": "Write File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function3": {
+      "main": [
+        [
+          {
+            "node": "Write File2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write File": {
+      "main": [
+        [
+          {
+            "node": "Function4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write File2": {
+      "main": [
+        [
+          {
+            "node": "Function4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

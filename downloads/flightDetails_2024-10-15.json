@@ -1,0 +1,73 @@
+[
+  {
+    "timestamp": 1728930600000,
+    "stats": {
+      "AI": [
+        {
+          "baseFlight": false,
+          "flightNo": "AI0545",
+          "trafficType": "Domestic",
+          "movementIndicator": "Arrival",
+          "scheduledTime": 1728993300000,
+          "actualTime": 1728993858000,
+          "status": null,
+          "belt": {
+            "actual_startTime": 1728993900000,
+            "actual_endTime": null,
+            "scheduled_startTime": 1728993858000,
+            "scheduled_endTime": 1728995640000,
+            "beltId": "7"
+          },
+          "boardingGates": {
+            "arrival1": {
+              "actual_startTime": null,
+              "actual_endTime": null,
+              "scheduled_startTime": null,
+              "scheduled_endTime": null,
+              "gateId": "DA"
+            },
+            "arrival2": null,
+            "departure1": null,
+            "departure2": null
+          },
+          "registration": "VTCIG",
+          "origin": "MAA",
+          "destination": "HYD",
+          "taxiingTime": 1158000,
+          "airborneTime": 1728992700000,
+          "airlineCode": "AI",
+          "stand": {
+            "departure": null,
+            "arrival": {
+              "actual_startTime": 1728993858000,
+              "actual_endTime": 1728995658000,
+              "scheduled_startTime": 1728993628000,
+              "scheduled_endTime": 1728995428000,
+              "slotId": "72"
+            }
+          },
+          "runway": "09R",
+          "aircraftType": "320",
+          "natureCode": "51",
+          "operationalStatus": "O",
+          "estimatedTime": 1728993628000,
+          "actual_onblock_timestamp": 1728993858000,
+          "targetOffBlockTime": null,
+          "tsat": null,
+          "tsatDuration": null,
+          "firstBagTimestamp": 1728994440000,
+          "lastBagTimestamp": 1728995340000,
+          "firstBagTimeDiff": null,
+          "lastBagTimeDiff": null,
+          "isFirstBagCompliant": null,
+          "isLastBagCompliant": null,
+          "apronType": null,
+          "bagCount": null,
+          "delayCode1": null,
+          "delayCode2": null,
+          "delayCode3": null
+        }
+      ]
+    }
+  }
+]

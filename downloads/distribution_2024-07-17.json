@@ -1,0 +1,49 @@
+{
+  "airlineStats": [
+    {
+      "timestamp": 1721154600000,
+      "stats": {
+        "6E": {
+          "uniquePassengerCount": 8
+        },
+        "I5": {
+          "uniquePassengerCount": 8
+        },
+        "SG": {
+          "uniquePassengerCount": 4
+        },
+        "AI": {
+          "uniquePassengerCount": 20
+        },
+        "UK": {
+          "uniquePassengerCount": 3
+        }
+      }
+    }
+  ],
+  "cussStats": [
+    {
+      "timestamp": 1721154600000,
+      "stats": {
+        "HIALAK36": {
+          "uniquePassengerCount": 24
+        },
+        "HIALAK55": {
+          "uniquePassengerCount": 3
+        },
+        "HIALAK38": {
+          "uniquePassengerCount": 1
+        },
+        "HIALAK44": {
+          "uniquePassengerCount": 6
+        },
+        "HIALAK37": {
+          "uniquePassengerCount": 7
+        },
+        "HIALAK43": {
+          "uniquePassengerCount": 4
+        }
+      }
+    }
+  ]
+}
