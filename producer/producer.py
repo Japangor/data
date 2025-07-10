@@ -46,13 +46,24 @@ def load_all_matches(base_dir):
             try:
                 with open(match_path, encoding='utf-8') as f:
                     match_data = json.load(f)
-                with open(comm1, encoding='utf-8') as f:
-                    comm_data_1 = json.load(f)
-                with open(comm2, encoding='utf-8') as f:
-                    comm_data_2 = json.load(f)
-                events_1 = comm_data_1.get("Commentary", [])[::-1]
-                events_2 = comm_data_2.get("Commentary", [])[::-1]
-                all_events = events_1 + events_2
+                # Helper to load commentary and summary
+                def load_comm_with_summary(path):
+                    with open(path, encoding='utf-8') as f:
+                        data = json.load(f)
+                        commentary = data.get("Commentary", [])[::-1]
+                        # Extract summary fields (everything except Commentary)
+                        summary = {k: v for k, v in data.items() if k != "Commentary"}
+                        return commentary, summary
+                events_1, summary_1 = load_comm_with_summary(comm1)
+                events_2, summary_2 = load_comm_with_summary(comm2)
+                # Attach summary to each event
+                all_events = []
+                for ev in events_1:
+                    ev["_summary"] = summary_1
+                    all_events.append(ev)
+                for ev in events_2:
+                    ev["_summary"] = summary_2
+                    all_events.append(ev)
                 matches.append({
                     'folder': folder,
                     'match_data': match_data,
@@ -108,17 +119,21 @@ def stream_match_events(match, delay):
             stats["wickets"] += 1
         return stats
 
-    # Group commentary events by innings
-    innings_events = [[] for _ in range(len(inning_team_map))]
+    # Group commentary events by innings using summary fields
+    innings_events = {}
     for event in commentary:
         if not event.get("Isball", False):
             continue
         if not event.get("Over") or str(event.get("Over")).strip() == "":
             continue
-        # Use InningNo from event to assign to correct inning
-        event_inning_no = int(event.get("InningNo", 1))
-        if 1 <= event_inning_no <= len(innings_events):
-            innings_events[event_inning_no - 1].append(event)
+        summary = event.get("_summary", {})
+        inning_no = int(summary.get("InningNo", 1))
+        batting_team_id = str(summary.get("BattingTeam_Id", ""))
+        bowling_team_id = str(summary.get("BowlingTeam_Id", ""))
+        key = (inning_no, batting_team_id, bowling_team_id)
+        if key not in innings_events:
+            innings_events[key] = []
+        innings_events[key].append(event)
 
     # Build teams list with id, name, and players 
     teams_list = []
@@ -138,9 +153,15 @@ def stream_match_events(match, delay):
             "players": players_list
         })
     # Stream events for each inning in order
-    for inning_idx, inning_info in enumerate(inning_team_map):
-        inning_no = inning_idx + 1  # 1-based inning number
-        for event in innings_events[inning_idx]:
+    for idx, ((inning_no, batting_team_id, bowling_team_id), events) in enumerate(sorted(innings_events.items())):
+        inning_info = None
+        for itm in inning_team_map:
+            if itm["batting_team_id"] == batting_team_id and itm["bowling_team_id"] == bowling_team_id:
+                inning_info = itm
+                break
+        if not inning_info:
+            inning_info = {"batting_team": batting_team_id, "bowling_team": bowling_team_id}
+        for event in events:
             batsman_id = event.get("Batsman", "")
             bowler_id = event.get("Bowler", "")
             non_striker_id = event.get("Non_Striker", "")
@@ -225,11 +246,11 @@ def stream_match_events(match, delay):
                 "batsman_stats": batsman_current_stats,
                 "non_striker_stats": non_striker_stats,
                 "bowler_stats": bowler_current_stats,
-                "batting_team": event.get("BattingTeam") or inning_info["batting_team"],
-                "bowling_team": event.get("BowlingTeam") or inning_info["bowling_team"],
-                "batting_team_name": event.get("BattingTeam") or inning_info["batting_team"],
-                "bowling_team_name": event.get("BowlingTeam") or inning_info["bowling_team"],
-                "InningNo": inning_no,  
+                "batting_team": inning_info["batting_team"],
+                "bowling_team": inning_info["bowling_team"],
+                "batting_team_name": inning_info["batting_team"],
+                "bowling_team_name": inning_info["bowling_team"],
+                "InningNo": inning_no,
             }
             try:
                 producer.produce(topic, key=str(match_event["match_id"]), value=json.dumps(match_event))

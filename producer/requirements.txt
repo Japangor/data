@@ -4,3 +4,7 @@ flask
 flask-cors
 flask-socketio
 eventlet
+psycopg2-binary
+pyfcm
+google-auth
+requests
