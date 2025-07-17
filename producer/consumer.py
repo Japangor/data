@@ -82,7 +82,7 @@ consumer_ready_event = Event()
 
 # --- PostgreSQL connection setup (adjust as needed) ---
 # Example: db_conn = psycopg2.connect(dbname='yourdb', user='youruser', password='yourpass', host='localhost')
-db_conn = psycopg2.connect(dbname='cricket_alarm', user='postgres', password='admin',     host='host.docker.internal')
+db_conn = psycopg2.connect(dbname='cricket_alarm', user='cricketgmr', password='GMR@W@!$l',     host='103.209.90.18')
 
 # --- API: Register/Update User with FCM Token ---
 @app.route('/register', methods=['POST'])
