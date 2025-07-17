@@ -5,9 +5,10 @@ async_mode = 'eventlet'  # Use eventlet for proper WebSocket support
 import os
 import json
 import logging
-from confluent_kafka import Consumer, KafkaException
+from confluent_kafka import Consumer, KafkaException, Producer
+from confluent_kafka.admin import AdminClient, NewTopic
 from flask import Flask, jsonify, request
-from threading import Thread, Lock
+from threading import Thread, Lock, Event
 from flask_cors import CORS
 import time
 from flask_socketio import SocketIO, emit
@@ -38,6 +39,10 @@ consumer_conf = {
     'auto.offset.reset': 'earliest',
     'enable.auto.commit': True
 }
+
+# Producer for sending restart signals
+producer_conf = {'bootstrap.servers': kafka_broker}
+producer = Producer(producer_conf)
 
 consumer = None  # Will be initialized in consume_loop
 
@@ -72,9 +77,12 @@ restart_lock = Lock()
 # Track the current Kafka consumer group id
 global_group_id = 'cricket-consumer-group'
 
+# Event to signal when the consumer has processed its first event after restart
+consumer_ready_event = Event()
+
 # --- PostgreSQL connection setup (adjust as needed) ---
 # Example: db_conn = psycopg2.connect(dbname='yourdb', user='youruser', password='yourpass', host='localhost')
-db_conn = psycopg2.connect(dbname='cricket_alarm', user='cricketgmr', password='GMR@W@!$l',     host='103.209.90.18')
+db_conn = psycopg2.connect(dbname='cricket_alarm', user='postgres', password='admin',     host='host.docker.internal')
 
 # --- API: Register/Update User with FCM Token ---
 @app.route('/register', methods=['POST'])
@@ -408,17 +416,39 @@ def reconnect_consumer():
             time.sleep(5)
 
 # --- FCM HTTP v1 Setup ---
-# Place your service account JSON in the project and set these environment variables:
-#   FCM_SERVICE_ACCOUNT_FILE=service-account.json
-#   FCM_PROJECT_ID=your-firebase-project-id
-FCM_SERVICE_ACCOUNT_FILE = os.getenv("FCM_SERVICE_ACCOUNT_FILE", "cricket.json")
+# Firebase credentials from environment variables
 FCM_PROJECT_ID = os.getenv("FCM_PROJECT_ID", "cricket-c7b8f")
+FCM_PRIVATE_KEY_ID = os.getenv("FCM_PRIVATE_KEY_ID")
+FCM_PRIVATE_KEY = os.getenv("FCM_PRIVATE_KEY")
+FCM_CLIENT_EMAIL = os.getenv("FCM_CLIENT_EMAIL")
+FCM_CLIENT_ID = os.getenv("FCM_CLIENT_ID")
+FCM_CLIENT_X509_CERT_URL = os.getenv("FCM_CLIENT_X509_CERT_URL")
 
 # --- FCM HTTP v1 Notification Function ---
 def send_fcm_notification(fcm_token, title, body, data=None):
     try:
-        credentials = service_account.Credentials.from_service_account_file(
-            FCM_SERVICE_ACCOUNT_FILE,
+        # Create credentials from environment variables
+        if not all([FCM_PRIVATE_KEY_ID, FCM_PRIVATE_KEY, FCM_CLIENT_EMAIL, FCM_CLIENT_ID]):
+            logger.error("[FCM] Missing required Firebase environment variables")
+            return None
+            
+        # Build service account info from environment variables
+        service_account_info = {
+            "type": "service_account",
+            "project_id": FCM_PROJECT_ID,
+            "private_key_id": FCM_PRIVATE_KEY_ID,
+            "private_key": FCM_PRIVATE_KEY.replace('\\n', '\n'),  # Handle escaped newlines
+            "client_email": FCM_CLIENT_EMAIL,
+            "client_id": FCM_CLIENT_ID,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_x509_cert_url": FCM_CLIENT_X509_CERT_URL,
+            "universe_domain": "googleapis.com"
+        }
+        
+        credentials = service_account.Credentials.from_service_account_info(
+            service_account_info,
             scopes=["https://www.googleapis.com/auth/firebase.messaging"]
         )
         credentials.refresh(GoogleAuthRequest())
@@ -452,6 +482,8 @@ def send_fcm_notification(fcm_token, title, body, data=None):
 
 # --- Milestone notification state (to avoid duplicate notifications per match/player/milestone) ---
 notified_milestones = defaultdict(set)  # {(match_id, player_id, event_type): set([milestone_value])}
+# --- Track 'close to milestone' notifications ---
+notified_close_milestones = defaultdict(set)  # {(match_id, player_id, event_type): set([milestone_value])}
 
 # --- Milestone check and notification logic ---
 def check_and_notify_milestones(event):
@@ -461,22 +493,36 @@ def check_and_notify_milestones(event):
     batsman_name = event.get('batsman_name')
     runs = (event.get('batsman_stats') or {}).get('runs', 0)
     for milestone in [50, 100, 200]:
-        key = (match_id, batsman_id, f"{milestone}_runs")
+        event_type = f"{milestone}_runs"
+        key = (match_id, batsman_id, event_type)
+        # Notify when milestone is reached
         if runs >= milestone and milestone not in notified_milestones[key]:
-            notify_subscribers(batsman_id, f"{milestone}_runs", batsman_name, runs, match_id)
+            notify_subscribers(batsman_id, event_type, batsman_name, runs, match_id, close=False)
             notified_milestones[key].add(milestone)
-    # Bowler milestones
+        # Notify when close to milestone (within 5 runs)
+        close_key = (match_id, batsman_id, event_type, 'close')
+        if milestone - 5 <= runs < milestone and milestone not in notified_close_milestones[close_key]:
+            notify_subscribers(
+                batsman_id,
+                event_type,  
+                batsman_name,
+                runs,
+                match_id,
+                close=True
+            )
+            notified_close_milestones[close_key].add(milestone)
     bowler_id = event.get('bowler_id')
     bowler_name = event.get('bowler_name')
     wickets = (event.get('bowler_stats') or {}).get('wickets', 0)
     for milestone in [1, 3, 5]:
-        key = (match_id, bowler_id, f"{milestone}_wickets")
+        event_type = f"{milestone}_wickets"
+        key = (match_id, bowler_id, event_type)
         if wickets >= milestone and milestone not in notified_milestones[key]:
-            notify_subscribers(bowler_id, f"{milestone}_wickets", bowler_name, wickets, match_id)
+            notify_subscribers(bowler_id, event_type, bowler_name, wickets, match_id)
             notified_milestones[key].add(milestone)
 
 # --- Notify all subscribers for a player/event_type ---
-def notify_subscribers(player_id, event_type, player_name, value, match_id):
+def notify_subscribers(player_id, event_type, player_name, value, match_id, close=False):
     with db_conn.cursor() as cur:
         cur.execute(
             "SELECT user_id FROM subscriptions WHERE player_id=%s AND event_type=%s",
@@ -487,10 +533,16 @@ def notify_subscribers(player_id, event_type, player_name, value, match_id):
             cur.execute("SELECT fcm_token FROM users WHERE user_id=%s", (user_id,))
             row = cur.fetchone()
             if row and row[0]:
+                if close:
+                    title = "Milestone Approaching!"
+                    body = f"Player {player_name} is close to {event_type.replace('_', ' ')} (current: {value}) in match {match_id}"
+                else:
+                    title = "Milestone reached!"
+                    body = f"Player {player_name} reached {event_type.replace('_', ' ')} ({value}) in match {match_id}"
                 send_fcm_notification(
                     row[0],
-                    title="Milestone reached!",
-                    body=f"Player {player_name} reached {event_type.replace('_', ' ')} ({value}) in match {match_id}",
+                    title=title,
+                    body=body,
                     data={"player_id": player_id, "event_type": event_type, "match_id": match_id, "value": value}
                 )
 
@@ -498,6 +550,7 @@ def consume_loop():
     global latest_event_by_match, kafka_connected, num_events_processed, global_group_id
     logger.info(f"Starting consume_loop thread... (group.id={consumer_conf['group.id']})")
     reconnect_consumer()
+    first_event = True
     while not shutdown_flag:
         try:
             msg = consumer.poll(0.1)
@@ -529,6 +582,7 @@ def consume_loop():
                         all_events_by_match[match_id] = []
                     all_events_by_match[match_id].append(event)
                     logger.info(f"[consume_loop] Appended event to all_events_by_match[{match_id}]. Total events: {len(all_events_by_match[match_id])}")
+                    # Always sort events by over and ball for robustness
                     all_events_by_match[match_id].sort(key=lambda e: (
                         float(e.get('over', 0) or 0),
                         float(e.get('ball', 0) or 0)
@@ -557,6 +611,10 @@ def consume_loop():
                 socketio.emit('new_event', event)
                 # --- Milestone notification logic ---
                 check_and_notify_milestones(event)
+                # Signal that the consumer is ready after processing the first event
+                if first_event:
+                    consumer_ready_event.set()
+                    first_event = False
             except Exception as e:
                 logger.error(f"Failed to parse/process event: {e}")
         except Exception as e:
@@ -569,31 +627,15 @@ def consume_loop():
     except Exception:
         pass
 
-def run_api():
-    try:
-        # Try to get the local IP address for Docker/host info
-        hostname = socket.gethostname()
-        local_ip = socket.gethostbyname(hostname)
-    except Exception:
-        local_ip = 'localhost'
-    logger.info(f"Starting Flask API with WebSocket support on port 5000... (async_mode={async_mode})")
-    logger.info(f"API should be accessible at: http://localhost:5000/ (if running locally)")
-    logger.info(f"If running in Docker, try: http://127.0.0.1:5000/ or http://{local_ip}:5000/")
-    try:
-        socketio.run(app, host='0.0.0.0', port=5000, debug=False, use_reloader=False)
-    except OSError as e:
-        logger.error(f"Failed to bind to port 5000: {e}. Is another process using this port?")
-        raise
-
 @app.route('/restart-stream', methods=['POST'])
 def restart_stream():
     global consumer, all_events_by_match, latest_event_by_match, kafka_connected, num_events_processed, global_group_id
     with restart_lock:
-        logger.info("Received request to restart stream and replay all events from the beginning.")
+        logger.info("[restart-stream] Received request to restart stream and replay all events from the beginning.")
         # Stop the current consumer
         globals()['shutdown_flag'] = True
         time.sleep(1)  # Give the consumer thread a moment to exit
-        # Clear in-memory state
+        # Clear in-memory state under lock
         with lock:
             all_events_by_match.clear()
             latest_event_by_match.clear()
@@ -603,14 +645,264 @@ def restart_stream():
             num_events_processed = 0
         # Generate a new group id (forces Kafka to replay from the beginning)
         new_group_id = f"cricket-consumer-group-replay-{int(time.time())}-{''.join(random.choices(string.ascii_lowercase+string.digits, k=4))}"
-        logger.info(f"Restarting consumer with new group id: {new_group_id}")
+        logger.info(f"[restart-stream] Restarting consumer with new group id: {new_group_id}")
         consumer_conf['group.id'] = new_group_id
         global_group_id = new_group_id
         # Reset shutdown flag and start a new consumer thread
         globals()['shutdown_flag'] = False
+        consumer_ready_event.clear()
         consumer_thread = Thread(target=consume_loop, daemon=True)
         consumer_thread.start()
-        return jsonify({"status": "restarted", "new_group_id": new_group_id}), 200
+        # Wait for the new consumer to process at least one event (timeout after 10 seconds)
+        logger.info("[restart-stream] Waiting for consumer to process first event...")
+        ready = consumer_ready_event.wait(timeout=10)
+        if ready:
+            logger.info("[restart-stream] Consumer processed first event after restart.")
+            return jsonify({"status": "restarted", "new_group_id": new_group_id}), 200
+        else:
+            logger.warning("[restart-stream] Consumer did not process any event within timeout.")
+            return jsonify({"status": "restarted", "new_group_id": new_group_id, "warning": "No events processed within timeout."}), 202
+
+@app.route('/restart-live-stream', methods=['POST'])
+def restart_live_stream():
+    """
+    Partial restart: Clears consumer memory and resets Kafka topic.
+    Producer may continue from current position.
+    
+    For COMPLETE restart from very beginning (0.1 overs, 0/0 scores):
+    Run: docker-compose down && docker-compose up -d
+    """
+    """
+    Comprehensive restart endpoint that:
+    1. Clears all in-memory data (events, matches, player stats)
+    2. Uses Kafka Admin API to delete and recreate topic
+    3. Signals producer restart via environment variable or file
+    4. Restarts consumer with new group ID to consume from beginning
+    
+    WARNING: This is for development/demo only. DO NOT expose in production!
+    """
+    global consumer, all_events_by_match, latest_event_by_match, kafka_connected, num_events_processed, global_group_id, notified_milestones, notified_close_milestones
+    from confluent_kafka.admin import AdminClient, NewTopic
+    
+    with restart_lock:
+        logger.info("[restart-live-stream] Starting comprehensive restart of live cricket stream...")
+        responses = {}
+        
+        try:
+            # Step 1: Stop current consumer
+            logger.info("[restart-live-stream] Stopping current consumer...")
+            globals()['shutdown_flag'] = True
+            time.sleep(2)  # Give consumer thread time to exit
+            
+            # Step 2: Clear all in-memory state
+            logger.info("[restart-live-stream] Clearing all in-memory data...")
+            with lock:
+                all_events_by_match.clear()
+                latest_event_by_match.clear()
+                teams_by_id.clear()
+                players_by_team.clear()
+                players_by_id.clear()
+                num_events_processed = 0
+                # Clear milestone notification state
+                notified_milestones.clear()
+                notified_close_milestones.clear()
+            
+            # Step 3: Use Kafka Admin API to delete and recreate topic
+            logger.info("[restart-live-stream] Managing Kafka topic via Admin API...")
+            admin_client = AdminClient({'bootstrap.servers': kafka_broker})
+            
+            try:
+                # Delete topic
+                logger.info("[restart-live-stream] Deleting Kafka topic...")
+                delete_result = admin_client.delete_topics([topic], operation_timeout=30)
+                
+                # Wait for deletion to complete
+                for topic_name, future in delete_result.items():
+                    try:
+                        future.result()  # Block until deletion is complete
+                        responses['delete_topic'] = f"Topic {topic_name} deleted successfully"
+                        logger.info(f"Topic {topic_name} deleted successfully")
+                    except Exception as e:
+                        if "UnknownTopicOrPartitionError" in str(e):
+                            responses['delete_topic'] = f"Topic {topic_name} didn't exist, proceeding..."
+                            logger.info(f"Topic {topic_name} didn't exist, proceeding...")
+                        else:
+                            raise e
+                
+                # Wait a bit for deletion to propagate
+                time.sleep(3)
+                
+                # Create topic
+                logger.info("[restart-live-stream] Creating Kafka topic...")
+                new_topic = NewTopic(topic, num_partitions=1, replication_factor=1)
+                create_result = admin_client.create_topics([new_topic], operation_timeout=30)
+                
+                # Wait for creation to complete
+                for topic_name, future in create_result.items():
+                    try:
+                        future.result()  # Block until creation is complete
+                        responses['create_topic'] = f"Topic {topic_name} created successfully"
+                        logger.info(f"Topic {topic_name} created successfully")
+                    except Exception as e:
+                        error_str = str(e)
+                        if "TopicExistsError" in error_str or "TOPIC_ALREADY_EXISTS" in error_str:
+                            responses['create_topic'] = f"Topic {topic_name} already exists, proceeding..."
+                            logger.info(f"Topic {topic_name} already exists, proceeding...")
+                        else:
+                            logger.error(f"Unexpected error creating topic: {e}")
+                            responses['create_topic_error'] = error_str
+                            # Don't raise - continue with restart process
+                            
+            except Exception as e:
+                logger.error(f"Kafka admin operation failed: {e}")
+                responses['kafka_admin_error'] = str(e)
+                # Continue anyway - the consumer restart might still work
+            
+            # Step 4: Send multiple restart signals to ensure producer gets them
+            logger.info("[restart-live-stream] Sending multiple restart signals to producer...")
+            try:
+                restart_signal = {
+                    "action": "restart",
+                    "timestamp": int(time.time()),
+                    "requested_by": "consumer_api",
+                    "force_restart": True
+                }
+                
+                # Send multiple signals to ensure delivery
+                for i in range(5):
+                    try:
+                        producer.produce('cricket-restart', key=f'restart-{i}', value=json.dumps(restart_signal))
+                        producer.flush()
+                        time.sleep(0.1)  # Small delay between signals
+                    except Exception as e:
+                        logger.warning(f"Failed to send restart signal {i}: {e}")
+                
+                responses['producer_signal'] = f"Multiple restart signals sent via Kafka topic 'cricket-restart'"
+                logger.info("Multiple producer restart signals sent via Kafka")
+                
+                # Also create a restart flag file for additional signaling
+                try:
+                    import os
+                    restart_flag_path = "/tmp/cricket_restart_flag"
+                    with open(restart_flag_path, 'w') as f:
+                        f.write(f"{int(time.time())}\nFORCE_RESTART_FROM_BEGINNING\n")
+                    responses['restart_flag_file'] = f"Restart flag file created at {restart_flag_path}"
+                    logger.info(f"Restart flag file created at {restart_flag_path}")
+                except Exception as e:
+                    responses['restart_flag_error'] = str(e)
+                    logger.warning(f"Could not create restart flag file: {e}")
+                
+                # Also try to create the restart topic if it doesn't exist
+                try:
+                    restart_topic = NewTopic('cricket-restart', num_partitions=1, replication_factor=1)
+                    admin_client.create_topics([restart_topic], operation_timeout=10)
+                    responses['restart_topic_created'] = "Restart topic created"
+                except Exception as e:
+                    if "TopicExistsError" not in str(e):
+                        logger.warning(f"Could not create restart topic: {e}")
+                
+            except Exception as e:
+                responses['producer_signal_error'] = str(e)
+                logger.warning(f"Could not send producer restart signals: {e}")
+            
+            # Step 5: Generate new consumer group ID and restart consumer
+            new_group_id = f"cricket-consumer-group-live-restart-{int(time.time())}-{''.join(random.choices(string.ascii_lowercase+string.digits, k=6))}"
+            logger.info(f"[restart-live-stream] Starting consumer with new group ID: {new_group_id}")
+            
+            consumer_conf['group.id'] = new_group_id
+            global_group_id = new_group_id
+            
+            # Reset shutdown flag and start new consumer thread
+            globals()['shutdown_flag'] = False
+            consumer_ready_event.clear()
+            
+            consumer_thread = Thread(target=consume_loop, daemon=True)
+            consumer_thread.start()
+
+            # Step 5.5: Restart the producer container to guarantee a fresh start
+            import subprocess
+            try:
+                restart_cmd = ['docker', 'compose', 'restart', 'producer']
+                proc = subprocess.run(restart_cmd, capture_output=True, text=True)
+                responses['restart_producer'] = proc.stdout + proc.stderr
+                logger.info("Producer container restarted via docker compose.")
+            except Exception as e:
+                responses['restart_producer_error'] = str(e)
+                logger.error(f"Could not restart producer container: {e}")
+
+            # Step 6: Wait for consumer to be ready
+            logger.info("[restart-live-stream] Waiting for consumer to process first event...")
+            ready = consumer_ready_event.wait(timeout=20)
+            
+            if ready:
+                logger.info("[restart-live-stream] Live stream restart completed successfully!")
+                responses['status'] = 'success'
+                responses['message'] = 'Live cricket stream restarted from beginning'
+                
+                # Emit restart notification to all WebSocket clients
+                socketio.emit('stream_restarted', {
+                    'message': 'Live cricket stream has been restarted from the beginning',
+                    'timestamp': time.time(),
+                    'new_group_id': new_group_id
+                })
+                
+                return jsonify({
+                    'status': 'success',
+                    'message': 'Live cricket stream restarted successfully from beginning',
+                    'new_group_id': new_group_id,
+                    'details': responses
+                }), 200
+            else:
+                logger.warning("[restart-live-stream] Consumer ready timeout - stream may still be starting")
+                return jsonify({
+                    'status': 'partial_success',
+                    'message': 'Stream restarted but consumer not ready within timeout',
+                    'new_group_id': new_group_id,
+                    'details': responses
+                }), 202
+                
+        except Exception as e:
+            logger.error(f"[restart-live-stream] Error during restart: {e}")
+            responses['error'] = str(e)
+            return jsonify({
+                'status': 'error',
+                'message': f'Failed to restart live stream: {str(e)}',
+                'details': responses
+            }), 500
+
+@app.route('/restart', methods=['POST'])
+def restart_kafka_topic_and_services():
+    """
+    WARNING: This endpoint is for development/demo only. It deletes and recreates the Kafka topic 'cricket',
+    and restarts both producer and consumer containers. DO NOT expose in production!
+    """
+    import subprocess
+    responses = {}
+    try:
+        # Delete the topic
+        delete_cmd = [
+            'docker', 'compose', 'exec', '-T', 'kafka',
+            'kafka-topics', '--bootstrap-server', 'kafka:9092', '--delete', '--topic', 'cricket'
+        ]
+        proc = subprocess.run(delete_cmd, capture_output=True, text=True)
+        responses['delete_topic'] = proc.stdout + proc.stderr
+        # Wait a moment for deletion to propagate
+        time.sleep(2)
+        # Recreate the topic
+        create_cmd = [
+            'docker', 'compose', 'exec', '-T', 'kafka',
+            'kafka-topics', '--bootstrap-server', 'kafka:9092', '--create', '--topic', 'cricket', '--partitions', '1', '--replication-factor', '1'
+        ]
+        proc = subprocess.run(create_cmd, capture_output=True, text=True)
+        responses['create_topic'] = proc.stdout + proc.stderr
+        # Restart producer and consumer containers
+        restart_cmd = ['docker', 'compose', 'restart', 'producer', 'consumer']
+        proc = subprocess.run(restart_cmd, capture_output=True, text=True)
+        responses['restart_services'] = proc.stdout + proc.stderr
+        return jsonify({'status': 'success', 'details': responses}), 200
+    except Exception as e:
+        responses['error'] = str(e)
+        return jsonify({'status': 'error', 'details': responses}), 500
 
 @app.route('/current-group-id', methods=['GET'])
 def get_current_group_id():
@@ -639,6 +931,22 @@ def get_players():
             return jsonify({'error': 'No players found for this team'}), 404
         # Return player details
         return jsonify([players_by_id[pid] for pid in player_ids])
+
+def run_api():
+    try:
+        # Try to get the local IP address for Docker/host info
+        hostname = socket.gethostname()
+        local_ip = socket.gethostbyname(hostname)
+    except Exception:
+        local_ip = 'localhost'
+    logger.info(f"Starting Flask API with WebSocket support on port 5000... (async_mode={async_mode})")
+    logger.info(f"API should be accessible at: http://localhost:5000/ (if running locally)")
+    logger.info(f"If running in Docker, try: http://127.0.0.1:5000/ or http://{local_ip}:5000/")
+    try:
+        socketio.run(app, host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+    except OSError as e:
+        logger.error(f"Failed to bind to port 5000: {e}. Is another process using this port?")
+        raise
 
 if __name__ == "__main__":
     import eventlet

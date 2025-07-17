@@ -21,6 +21,8 @@ services:
       - zookeeper
   producer:
     build: ./producer
+    env_file:
+      - .env
     environment:
       KAFKA_BROKER: kafka:9092
     depends_on:
@@ -28,6 +30,8 @@ services:
     command: python producer.py
   consumer:
     build: ./producer
+    env_file:
+      - .env
     environment:
       KAFKA_BROKER: kafka:9092
     depends_on:
